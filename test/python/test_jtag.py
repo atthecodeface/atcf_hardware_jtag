@@ -55,11 +55,12 @@ class c_jtag_apb_time_test_base(ThExecFile):
     """
     Base methods for JTAG interaction, really
     """
-    #f run_start - invoked by submodules
-    def run_start(self):
+    #f run__init - invoked by submodules
+    def run__init(self):
         self.bfm_wait(10)
         self.jtag_module = JtagModule(self.bfm_wait, self.tck_enable, self.jtag__tms, self.jtag__tdi, self.tdo, self)
         pass
+
     #f apb_write
     def apb_write(self, address, data, write_ir=False):
         """
@@ -111,8 +112,6 @@ class c_jtag_apb_time_test_idcode(c_jtag_apb_time_test_base):
     """
     #f run
     def run(self):
-        self.run_start()
-
         idcodes = self.jtag_read_idcodes()
         if len(idcodes)==1:
             if idcodes[0] != 0xabcde6e3:
@@ -137,8 +136,6 @@ class c_jtag_apb_time_test_bypass(c_jtag_apb_time_test_base):
     ir_value = 0x1f
     #f run
     def run(self):
-        self.run_start()
-
         self.jtag_reset()
         self.jtag_write_irs(ir_bits = bits_of_n(5,self.ir_value)) # bypass mode
 
@@ -176,8 +173,6 @@ class c_jtag_apb_time_test_time_slow(c_jtag_apb_time_test_base):
     """
     #f run
     def run(self):
-        self.run_start()
-
         self.jtag_reset()
         self.jtag_write_irs(ir_bits = bits_of_n(5,0x10)) # Send in 0x10 (apb_control)
         self.jtag_write_drs(dr_bits = bits_of_n(32,0))   # write apb_control of 0
@@ -213,8 +208,6 @@ class c_jtag_apb_time_test_time_fast(c_jtag_apb_time_test_base):
     """
     #f run
     def run(self):
-        self.run_start()
-
         self.jtag_reset()
         self.jtag_write_irs(ir_bits = bits_of_n(5,0x10)) # Send in 0x10 (apb_control)
         self.jtag_write_drs(dr_bits = bits_of_n(32,0))   # write apb_control of 0
@@ -258,8 +251,6 @@ class c_jtag_apb_time_test_time_fast2(c_jtag_apb_time_test_base):
     """
     #f run
     def run(self):
-        self.run_start()
-
         self.jtag_reset()
         self.jtag_write_irs(ir_bits = bits_of_n(5,0x10)) # Send in 0x10 (apb_control)
         self.jtag_write_drs(dr_bits = bits_of_n(32,0))   # write apb_control of 0
@@ -302,8 +293,6 @@ class c_jtag_apb_time_test_time_fast2(c_jtag_apb_time_test_base):
 class c_jtag_apb_time_test_time_fast3(c_jtag_apb_time_test_base):
     #f run
     def run(self):
-        self.run_start()
-
         self.jtag_reset()
         self.jtag_write_irs(ir_bits = bits_of_n(5,0x10)) # Send in 0x10 (apb_control)
         self.jtag_write_drs(dr_bits = bits_of_n(32,0))   # write apb_control of 0
@@ -357,8 +346,6 @@ class c_jtag_apb_time_test_comparator(c_jtag_apb_time_test_base):
     """
     #f run
     def run(self):
-        self.run_start()
-
         self.jtag_reset()
         self.jtag_write_irs(ir_bits = bits_of_n(5,0x10)) # Send in 0x10 (apb_control)
         self.jtag_write_drs(dr_bits = bits_of_n(32,0))   # write apb_control of 0
@@ -408,24 +395,14 @@ class jtag_apb_timer_hw(HardwareThDut):
 #c jtag_apb_timer
 class jtag_apb_timer(TestCase):
     hw = jtag_apb_timer_hw
+    _tests = {"idcode"      : (c_jtag_apb_time_test_idcode,2*1000,{}),
+              "bypass"      : (c_jtag_apb_time_test_bypass,4*1000,{}),
+              "bypass2"     : (c_jtag_apb_time_test_bypass2,4*1000,{}),
+              "timer_slow"  : (c_jtag_apb_time_test_time_slow,8*1000,{}),
+              "timer_fast"  : (c_jtag_apb_time_test_time_fast,8*1000,{}),
+              "timer_fast2" : (c_jtag_apb_time_test_time_fast2,6*1000,{}),
+              "timer_fast3" : (c_jtag_apb_time_test_time_fast3,10*1000,{}),
+              "comparator"  : (c_jtag_apb_time_test_comparator,10*1000,{}),
+    }
     pass
 
-#c Add tests to jtag_apb_timer
-test_dir = ""
-tests = { "idcode"     : (c_jtag_apb_time_test_idcode,2*1000),
-          "bypass"     : (c_jtag_apb_time_test_bypass,4*1000),
-          "bypass2"    : (c_jtag_apb_time_test_bypass2,4*1000),
-          "timer_slow" : (c_jtag_apb_time_test_time_slow,8*1000),
-          "timer_fast" : (c_jtag_apb_time_test_time_fast,8*1000),
-          "timer_fast2" : (c_jtag_apb_time_test_time_fast2,6*1000),
-          "timer_fast3" : (c_jtag_apb_time_test_time_fast3,10*1000),
-          "comparator" : (c_jtag_apb_time_test_comparator,10*1000),
-           }
-for tc in tests:
-    (tf,run_time) = tests[tc]
-    def test_fn(c, tf=tf, run_time=run_time):
-        c.run_test(hw_args={"th_exec_file_object_fn":tf}, run_time=run_time)
-        pass
-    setattr(jtag_apb_timer, "test_"+tc, test_fn)
-    pass
-pass
