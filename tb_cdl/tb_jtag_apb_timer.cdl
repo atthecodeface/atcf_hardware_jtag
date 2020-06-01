@@ -35,6 +35,8 @@ extern module se_test_harness( clock clk, output t_jtag jtag, output bit tck_ena
 module tb_jtag_apb_timer( clock jtag_tck, // Test harness runs off this
                           clock apb_clock,
                           input bit reset_n,
+                          input  t_apb_request  apb_request  "APB request",
+                          output t_apb_response apb_response "APB response",
                           input bit tck_enable "Clock enable for actual JTAG clock",
                           input t_jtag jtag,
                           output bit tdo
@@ -43,14 +45,18 @@ module tb_jtag_apb_timer( clock jtag_tck, // Test harness runs off this
 
     /*b Nets
      */
+    net t_apb_response apb_response;
+    net t_jtag apb_jtag;
+    net bit apb_jtag_tck_enable;
+    comb t_jtag jtag_int;
     net bit tdo;
     net bit[5]ir;
     net t_jtag_action dr_action;
     net bit[50]dr_in;
     net bit[50]dr_tdi_mask;
     net bit[50]dr_out;
-    net t_apb_request apb_request;
-    net t_apb_response apb_response;
+    net t_apb_request apb_request_int;
+    net t_apb_response apb_response_int;
     net bit[3] timer_equalled;
     comb bit tck_enable_fix;
     gated_clock clock jtag_tck active_high tck_enable_fix jtag_tck_gated;
@@ -58,10 +64,21 @@ module tb_jtag_apb_timer( clock jtag_tck, // Test harness runs off this
     /*b Instantiate APB timer
      */
     dut_instance: {
-        tck_enable_fix = tck_enable;
+        tck_enable_fix = tck_enable | apb_jtag_tck_enable;
+        apb_target_jtag apb2jtag( clk <- jtag_tck,
+                                  reset_n <= reset_n,
+
+                                  apb_request <= apb_request,
+                                  apb_response => apb_response,
+                                  jtag_tck_enable => apb_jtag_tck_enable,
+                                  jtag => apb_jtag,
+                                  jtag_tdo <= tdo
+            );
+        jtag_int  = jtag;
+        jtag_int |= apb_jtag;
         jtag_tap tap( jtag_tck <- jtag_tck_gated,
                       reset_n <= reset_n,
-                      jtag <= jtag,
+                      jtag <= jtag_int,
                       tdo => tdo,
 
                       ir => ir,
@@ -69,15 +86,6 @@ module tb_jtag_apb_timer( clock jtag_tck, // Test harness runs off this
                       dr_in => dr_in,
                       dr_tdi_mask <= dr_tdi_mask,
                       dr_out <= dr_out );
-
-        apb_target_timer timer( clk <- apb_clock,
-                         reset_n <= reset_n,
-
-                         apb_request <= apb_request,
-                         apb_response => apb_response,
-
-                         timer_equalled => timer_equalled
-            );
 
         jtag_tap_apb apb( jtag_tck <- jtag_tck_gated,
                       reset_n <= reset_n,
@@ -89,7 +97,16 @@ module tb_jtag_apb_timer( clock jtag_tck, // Test harness runs off this
                       dr_out => dr_out,
 
                       apb_clock <- apb_clock,
-                      apb_request => apb_request,
-                      apb_response <= apb_response );
+                      apb_request => apb_request_int,
+                      apb_response <= apb_response_int );
+
+        apb_target_timer timer( clk <- apb_clock,
+                         reset_n <= reset_n,
+
+                         apb_request <= apb_request_int,
+                         apb_response => apb_response_int,
+
+                         timer_equalled => timer_equalled
+            );
     }
 }

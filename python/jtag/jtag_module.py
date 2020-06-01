@@ -26,8 +26,8 @@ def int_of_bits(bits):
     return v
 
 #a Classes
-#c JtagModule
-class JtagModule:
+#c JtagModuleBase
+class JtagModuleBase:
     #b __init__
     def __init__(self, bfm_wait, tcken, tms, tdi, tdo, mixin=None):
         self.bfm_wait = bfm_wait
@@ -150,4 +150,116 @@ class JtagModule:
         data = self.jtag_shift(dr_bits) # Leaves it in Exit1-DR
         self.jtag_tms([1,0]) # Dump it back in to idle
         return data
+    pass
+#c JtagModule
+class JtagModule(JtagModuleBase):
+    pass
+#c JtagModuleApb
+#c apb_jtag_thef
+from regress.jtag import apb_target_jtag
+from regress.jtag.jtag import t_jtag
+class JtagModuleApb(JtagModuleBase):
+    def __init__(self, th, apb_bfm, jtag_map):
+        th.jtag_reset = self.jtag_reset
+        th.jtag_tms   = self.jtag_tms
+        th.jtag_shift = self.jtag_shift
+        th.jtag_reset = self.jtag_reset
+        th.jtag_read_idcodes = self.jtag_read_idcodes
+        th.jtag_write_irs = self.jtag_write_irs
+        th.jtag_write_drs = self.jtag_write_drs
+        self.bfm_wait = th.bfm_wait
+        self.apb_bfm = apb_bfm
+        self.jtag_map = jtag_map
+        self.jtag_status_reg = self.apb_bfm.reg(self.jtag_map.status)
+        self.jtag_tdocl_reg = self.apb_bfm.reg(self.jtag_map.tdoc)
+        self.jtag_data1_reg = self.apb_bfm.reg(self.jtag_map.data1)
+        pass
+
+    #f jtag_reset
+    def jtag_reset(self):
+        """
+        Reset the jtag - this requires 5 clocks with TMS high.
+
+        This leaves the JTAG state machine in reset
+        """
+        self.jtag_data1_reg.write(0x36)
+        self.jtag_data1_reg.write(0x36)
+        self.jtag_data1_reg.write(0x36)
+        self.jtag_data1_reg.write(0x36)
+        self.jtag_data1_reg.write(0x36)
+        pass
+
+    #f jtag_tms
+    def jtag_tms(self, tms_values):
+        """
+        Scan in a number of TMS values, to move the state machine on
+        """
+        for tms in tms_values:
+            self.jtag_data1_reg.write(0x34+(tms<<1))
+            pass
+        pass
+
+    #f jtag_shift
+    def jtag_shift(self, tdi_values, last_tms=1):
+        """
+        Shift in data from tdi_values, and transition out of shift mode
+        Record the shifted out data and return it.
+        Leave the JTAG state machine in Exit1.
+
+        This assumes the state machine is in a shift mode to start
+        with.  It runs the JTAG with TMS low for all except the last
+        tdi_values bit.  Then it runs with TMS high so that the last
+        bit is shifted in, and the state machine moves to exit1.
+
+        """
+        bits = []
+        n = 0
+        w=32
+        for tdi in tdi_values[:-1]:
+            self.jtag_data1_reg.write(0x52)
+            self.jtag_data1_reg.write(0x34 + (tdi&1))
+            n+=1
+            if n==w:
+                r = self.jtag_tdocl_reg.read()
+                for i in range(n):
+                    bits.append((r>>(w-n+i))&1)
+                    pass
+                n = 0
+                pass
+            pass
+        self.jtag_data1_reg.write(0x52)
+        self.jtag_data1_reg.write(0x34 + (last_tms<<1) + (tdi_values[-1]&1))
+        n+=1
+        r = self.jtag_tdocl_reg.read()
+        for i in range(n):
+            bits.append((r>>(w-n+i))&1)
+            pass
+        return bits
+
+    #f jtag_read_idcodes
+    def jtag_read_idcodes(self):
+        """
+        Read the JTAG idcodes on the scan chain. Return a list of 32-bit integer IDCODEs.
+
+        This resets the JTAG state machine, and then enters shift-dr.
+        In reset the JTAG TAP controllers should set the IR for IDCODE reading.
+        IDCODEs are guaranteed to be 32 bits, with a bottom bit set.
+
+        Hence one can scan out 32-bit values from the chain while the first bit out is set.
+
+        Leaves the state machine in shift-dr
+        """
+        self.jtag_reset()
+        self.jtag_tms([0,1,0,0]) # Put in to shift-dr
+        idcodes = []
+        while True:
+            bits = self.jtag_shift([0]*1,last_tms=0)
+            if bits[0]==0: break
+            bits += self.jtag_shift([0]*31,last_tms=0)
+            idcode = int_of_bits(bits)
+            idcodes.append(idcode)
+            pass
+        return idcodes
+
+    pass
 

@@ -77,7 +77,7 @@ module apb_target_jtag( clock clk         "System clock",
 """
 Simple OCD-style jtag master with an APB interface.
 
-OCD uses character streams to interact with JTAG
+OCD remote bitbang text protocol uses character streams to interact with JTAG
 
 A character in '01234567' sets TDI to bit 0, TMS to bit 1, and enables
 the jtag clock for one tick if TMS bit 2 is set.  A character 'R'
@@ -88,6 +88,20 @@ Characters can be written 1, 2, 3 or 4 bytes at a time; unknown characters are s
 
 The number of valid TDO bits can be read.
 The TDO bits can be read, and atomically read-and-clear # TDO bits.
+
+The purpose of the OCD bitbang is to support:
+
+scan in of N TDI bit values with TMS low for first N-1, high for last one, with an option to read TDO after each clock
+So a nybble mode with:
+
+* value of N
+* 1 bit indicating store TDO
+* 1 TMS value for last bit
+* N values for TDI
+
+This can be done with 6 bits for N in two bytes
+
+The process is to set TDI and TMS; read TDO if required; clock TCK (as in, TDO is read before TCK happens)
 
 """
 {
@@ -123,7 +137,7 @@ The TDO bits can be read, and atomically read-and-clear # TDO bits.
         case apb_address_data3:     { access <= apb_request.pwrite ? access_write_data : access_none; }
         case apb_address_data4:     { access <= apb_request.pwrite ? access_write_data : access_none; }
         }
-        if (!apb_request.psel || jtag_state.busy ) {
+        if (!apb_request.psel) {
             access <= access_none;
         }
 
@@ -176,13 +190,13 @@ The TDO bits can be read, and atomically read-and-clear # TDO bits.
             jtag_state.busy            <= 0;
         }
         jtag_state.tdo <= jtag_tdo;
-        if (access==access_write_data) {
+        if ((access==access_write_data) && !jtag_state.busy) {
             jtag_state.num_bytes_valid <= bundle(1b0,apb_request.paddr[2;0])+1;
             jtag_state.bytes           <= apb_request.pwdata;
             jtag_state.busy            <= 1;
             jtag_state.cycle           <= 0;
         }
-        if (access==access_read_tdo_clear) {
+        if ((access==access_read_tdo_clear) && !jtag_state.busy) {
             jtag_state.tdo_sr <= 0;
             jtag_state.num_valid_tdo <= 0;
         }

@@ -40,7 +40,7 @@ class DataCsr(Csr):
                24:  CsrField(width=8, name="byte3", brief="b3", doc="byte of JTAG control data; in OpenOCD mode 0x30-0x37 ('0' to '7') control tdi, tms and tck; 0x52 ('R') shifts TDO in"),
               }
 
-class TimerAddressMap(Map):
+class JtagAddressMap(Map):
     _map = [ MapCsr(reg=0, name="status",    brief="sts",  csr=StatusCsr, doc="read-only"),
              MapCsr(reg=2, name="tdo",       brief="tdo",  csr=TdoCsr, doc="read-only"),
              MapCsr(reg=3, name="tdo_clear", brief="tdoc", csr=TdoCsr, doc="read-only"),

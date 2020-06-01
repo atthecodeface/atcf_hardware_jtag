@@ -25,10 +25,14 @@ Only a single configuration of the JTAG TAP is tested.
 """
 
 #a Imports
-from regress.jtag.jtag_module import JtagModule
+from regress.apb.structs import t_apb_request, t_apb_response
+from regress.apb.bfm     import ApbMaster
+from regress.jtag import apb_target_jtag
+from regress.jtag.jtag_module import JtagModule, JtagModuleApb
 from cdl.sim     import ThExecFile
 from cdl.sim     import HardwareThDut
 from cdl.sim     import TestCase
+from cdl.utils   import csr
 
 #a Useful functions
 def int_of_bits(bits):
@@ -49,15 +53,38 @@ def bits_of_n(nbits, n):
     return bits
 
 #a Test classes
+#c ApbAddressMap
+class ApbAddressMap(csr.Map):
+    _width=32
+    _select=0
+    _address=0
+    _shift=0
+    _address_size=0
+    _map=[csr.MapMap(offset=0, name="jtag", map=apb_target_jtag.JtagAddressMap),
+         ]
+    pass
 #c c_jtag_apb_time_test_base
 class c_jtag_apb_time_test_base(ThExecFile):
     """
     Base methods for JTAG interaction, really
     """
+    #f __init__
+    def __init__(self, use_apb_target_jtag=False, **kwargs):
+        self.use_apb_target_jtag = use_apb_target_jtag
+        super(c_jtag_apb_time_test_base,self).__init__(**kwargs)
+        pass
     #f run__init - invoked by submodules
     def run__init(self):
         self.bfm_wait(10)
-        self.jtag_module = JtagModule(self.bfm_wait, self.tck_enable, self.jtag__tms, self.jtag__tdi, self.tdo, self)
+        if self.use_apb_target_jtag:
+            self.apb = ApbMaster(self, "apb_request",  "apb_response")
+            self.apb_map = ApbAddressMap()
+            self.jtag_map  = self.apb_map.jtag # This is an ApbAddressMap()
+            self.jtag_module = JtagModuleApb(self, self.apb, self.jtag_map)
+            pass
+        else:
+            self.jtag_module = JtagModule(self.bfm_wait, self.tck_enable, self.jtag__tms, self.jtag__tdi, self.tdo, self)
+            pass
         pass
 
     #f apb_write
@@ -70,6 +97,7 @@ class c_jtag_apb_time_test_base(ThExecFile):
         if write_ir:
             self.jtag_write_irs(ir_bits = bits_of_n(5,0x11)) # Send in 0x11 (apb_access)
             pass
+        if self.use_apb_target_jtag: self.jtag_tms([0,0,0,0,0,0])
         data = self.jtag_write_drs(dr_bits = bits_of_n(50,((address&0xffff)<<34)|((data&0xffffffff)<<2)|(2)))
         return data
 
@@ -83,8 +111,10 @@ class c_jtag_apb_time_test_base(ThExecFile):
         if write_ir:
             self.jtag_write_irs(ir_bits = bits_of_n(5,0x11)) # Send in 0x11 (apb_access)
             pass
+        if self.use_apb_target_jtag: self.jtag_tms([0,0,0,0,0,0])
         data = self.jtag_write_drs(dr_bits = bits_of_n(50,((address&0xffff)<<34)|(0<<2)|(1)))
         self.bfm_wait(100)
+        if self.use_apb_target_jtag: self.jtag_tms([0,0,0,0,0,0])
         data = self.jtag_write_drs(dr_bits = bits_of_n(50,0))
         return int_of_bits(data)
 
@@ -95,13 +125,17 @@ class c_jtag_apb_time_test_base(ThExecFile):
 
         Peforms the appropriate read access and returns the last data
         """
+        if self.use_apb_target_jtag: self.jtag_tms([0,0,0,0,0,0])
         data = self.jtag_write_drs(dr_bits = bits_of_n(50,((address&0xffff)<<34)|(0<<2)|(1)))
         return int_of_bits(data)
 
     #f run
     def run(self):
-        self.run_start()
         self.passtest("Test completed")
+        pass
+    #f run__finalize
+    def run__finalize(self):
+        # self.verbose.error("%s"%(self.global_cycle()))
         pass
 
 #c c_jtag_apb_time_test_idcode
@@ -114,11 +148,11 @@ class c_jtag_apb_time_test_idcode(c_jtag_apb_time_test_base):
         idcodes = self.jtag_read_idcodes()
         if len(idcodes)==1:
             if idcodes[0] != 0xabcde6e3:
-                self.failtest(0,"Expected idcode of 0xabcde6e3 but got %08x"%idcodes[0])
+                self.failtest("Expected idcode of 0xabcde6e3 but got %08x"%idcodes[0])
                 pass
             pass
         else:
-            self.failtest(0,"Expected a single idcode")
+            self.failtest("Expected a single idcode")
             pass
 
         self.passtest("Test completed")
@@ -359,7 +393,6 @@ class c_jtag_apb_time_test_comparator(c_jtag_apb_time_test_base):
         time0 = (data0>>2)&0x7fffffff
         time_delta = (data1 - data0)>>2
 
-
         self.apb_write(0x1204, time0 + time_delta*5)
         timer_passed = 0
         for i in range(10):
@@ -383,25 +416,50 @@ class jtag_apb_timer_hw(HardwareThDut):
     ]
     reset_desc = {"name":"reset_n", "init_value":0, "wait":5}
     module_name = "tb_jtag_apb_timer"
-    dut_inputs  = {"tck_enable" : 1,
+    dut_inputs  = {"apb_request":t_apb_request,
+                   "tck_enable" : 1,
                    "jtag":t_jtag,
     }
-    dut_outputs = { "tdo" : 1,
+    dut_outputs = { "apb_response":t_apb_response,
+                    "tdo" : 1,
     }
     pass
 
 #a Simulation test classes
-#c jtag_apb_timer
-class jtag_apb_timer(TestCase):
+#c JtagApbTimer
+class JtagApbTimer(TestCase):
     hw = jtag_apb_timer_hw
-    _tests = {"idcode"      : (c_jtag_apb_time_test_idcode,2*1000,{}),
-              "bypass"      : (c_jtag_apb_time_test_bypass,4*1000,{}),
-              "bypass2"     : (c_jtag_apb_time_test_bypass2,4*1000,{}),
-              "timer_slow"  : (c_jtag_apb_time_test_time_slow,8*1000,{}),
-              "timer_fast"  : (c_jtag_apb_time_test_time_fast,8*1000,{}),
-              "timer_fast2" : (c_jtag_apb_time_test_time_fast2,6*1000,{}),
-              "timer_fast3" : (c_jtag_apb_time_test_time_fast3,10*1000,{}),
-              "comparator"  : (c_jtag_apb_time_test_comparator,10*1000,{}),
+    kwargs = {"th_args":{"use_apb_target_jtag":False}}
+    _tests = {
+        "idcode"      : (c_jtag_apb_time_test_idcode,2*1000,     kwargs),
+        "bypass"      : (c_jtag_apb_time_test_bypass,4*1000,     kwargs),
+        "bypass2"     : (c_jtag_apb_time_test_bypass2,4*1000,    kwargs),
+        "timer_slow"  : (c_jtag_apb_time_test_time_slow,8*1000,  kwargs),
+        "timer_fast"  : (c_jtag_apb_time_test_time_fast,8*1000,  kwargs),
+        "timer_fast2" : (c_jtag_apb_time_test_time_fast2,6*1000, kwargs),
+        "timer_fast3" : (c_jtag_apb_time_test_time_fast3,10*1000,kwargs),
+        "comparator"  : (c_jtag_apb_time_test_comparator,10*1000,kwargs),
+
+        "smoke"  : (c_jtag_apb_time_test_time_slow,8*1000,  kwargs),
+    }
+    pass
+
+#c ApbTargetJtag
+class ApbTargetJtag(TestCase):
+    hw = jtag_apb_timer_hw
+    # "verbosity":0,
+    kwargs = {"th_args":{"use_apb_target_jtag":True},}
+    _tests = {
+       "idcode"      : (c_jtag_apb_time_test_idcode,       4*1000,  kwargs),
+       "bypass"      : (c_jtag_apb_time_test_bypass,      20*1000,  kwargs),
+       "bypass2"     : (c_jtag_apb_time_test_bypass2,     20*1000,  kwargs),
+       "timer_slow"  : (c_jtag_apb_time_test_time_slow,   40*1000,  kwargs),
+       "timer_fast"  : (c_jtag_apb_time_test_time_fast,   40*1000,  kwargs),
+       "timer_fast2" : (c_jtag_apb_time_test_time_fast2,  40*1000,  kwargs),
+       "timer_fast3" : (c_jtag_apb_time_test_time_fast3,  40*1000, kwargs),
+        "comparator"  : (c_jtag_apb_time_test_comparator, 45*1000, kwargs),
+
+        "smoke"  : (c_jtag_apb_time_test_time_slow,40*1000,  kwargs),
     }
     pass
 
