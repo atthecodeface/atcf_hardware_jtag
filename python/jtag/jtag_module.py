@@ -154,11 +154,8 @@ class JtagModuleBase:
 #c JtagModule
 class JtagModule(JtagModuleBase):
     pass
-#c JtagModuleApb
-#c apb_jtag_thef
-from regress.jtag import apb_target_jtag
-from regress.jtag.jtag import t_jtag
-class JtagModuleApb(JtagModuleBase):
+#c JtagModuleApbBase
+class JtagModuleApbBase(JtagModuleBase):
     def __init__(self, th, apb_bfm, jtag_map):
         th.jtag_reset = self.jtag_reset
         th.jtag_tms   = self.jtag_tms
@@ -171,8 +168,10 @@ class JtagModuleApb(JtagModuleBase):
         self.apb_bfm = apb_bfm
         self.jtag_map = jtag_map
         self.jtag_status_reg = self.apb_bfm.reg(self.jtag_map.status)
+        self.jtag_tdo_reg   = self.apb_bfm.reg(self.jtag_map.tdo)
         self.jtag_tdocl_reg = self.apb_bfm.reg(self.jtag_map.tdoc)
         self.jtag_data1_reg = self.apb_bfm.reg(self.jtag_map.data1)
+        self.jtag_data4_reg = self.apb_bfm.reg(self.jtag_map.data4)
         pass
 
     #f jtag_reset
@@ -182,10 +181,7 @@ class JtagModuleApb(JtagModuleBase):
 
         This leaves the JTAG state machine in reset
         """
-        self.jtag_data1_reg.write(0x36)
-        self.jtag_data1_reg.write(0x36)
-        self.jtag_data1_reg.write(0x36)
-        self.jtag_data1_reg.write(0x36)
+        self.jtag_data4_reg.write(0x36363636)
         self.jtag_data1_reg.write(0x36)
         pass
 
@@ -262,4 +258,69 @@ class JtagModuleApb(JtagModuleBase):
         return idcodes
 
     pass
+
+#c JtagModuleApbSlow
+class JtagModuleApbSlow(JtagModuleApbBase):
+    pass
+#c JtagModuleApbFast
+class JtagModuleApbFast(JtagModuleApbBase):
+    #f jtag_reset
+    def jtag_reset(self):
+        """
+        Reset the jtag - this requires 5 clocks with TMS high.
+
+        This leaves the JTAG state machine in reset
+        """
+        self.jtag_data1_reg.write(0x80 + ((4)<<2) )
+        pass
+
+    #f jtag_tms
+    def jtag_tms(self, tms_values):
+        """
+        Scan in a number of TMS values, to move the state machine on
+        """
+        x=0
+        for i in range(len(tms_values)):
+            x += tms_values[i]<<i
+            pass
+        self.jtag_tdo_reg.write(x)
+        self.jtag_data1_reg.write(0x81 + ((len(tms_values)-1)<<2))
+        pass
+
+    #f jtag_shift
+    def jtag_shift(self, tdi_values, last_tms=1):
+        """
+        Shift in data from tdi_values, and transition out of shift mode
+        Record the shifted out data and return it.
+        Leave the JTAG state machine in Exit1.
+
+        This assumes the state machine is in a shift mode to start
+        with.  It runs the JTAG with TMS low for all except the last
+        tdi_values bit.  Then it runs with TMS high so that the last
+        bit is shifted in, and the state machine moves to exit1.
+
+        """
+        bits = []
+        n = 0
+        w = 32
+        total = len(tdi_values)
+        i = 0
+        while i<total:
+            n = total-i
+            if n>32: n=32
+            set_last_tms = 0
+            if last_tms and ((i+n)==total): set_last_tms=1
+            x = 0
+            for b in range(n):
+                x += tdi_values[i+b]<<b
+                pass
+            self.jtag_tdo_reg.write(x)
+            self.jtag_data1_reg.write(0x82 + set_last_tms + ((n-1)<<2))
+            i += n
+            r = self.jtag_tdocl_reg.read()
+            for b in range(n):
+                bits.append((r>>(w-n+b))&1)
+                pass
+            pass
+        return bits
 

@@ -44,6 +44,7 @@ typedef enum [3] {
 typedef enum [3] {
     access_none                  "No APB access",
     access_read_status           "Read the address register",
+    access_write_tdo             "Write the tdo register",
     access_read_tdo              "Read the tdo register",
     access_read_tdo_clear        "Read the tdo register and clear count",
     access_write_data            "Write N characters",
@@ -59,6 +60,7 @@ typedef struct {
     bit[6] num_valid_tdo;
     bit[3] num_bytes_valid;
     bit[32] bytes;
+    bit[5] bits_remaining;
     bit busy;
     bit cycle;
 } t_jtag_state;
@@ -89,19 +91,22 @@ Characters can be written 1, 2, 3 or 4 bytes at a time; unknown characters are s
 The number of valid TDO bits can be read.
 The TDO bits can be read, and atomically read-and-clear # TDO bits.
 
-The purpose of the OCD bitbang is to support:
+The purpose of this module is to support:
 
-scan in of N TDI bit values with TMS low for first N-1, high for last one, with an option to read TDO after each clock
-So a nybble mode with:
+jtag_reset
+  tms=1, clock 5 times
 
-* value of N
-* 1 bit indicating store TDO
-* 1 TMS value for last bit
-* N values for TDI
+jtag_tms
+  tms=[a,b,..] clock for each tdi x
 
-This can be done with 6 bits for N in two bytes
+jtag_shift_last_tms_0
+  tms=0, tdi=[a,b,...], read then clock for each tdi
+  
+jtag_shift_last_tms_1
+  tms=0...1, tdi=[a,b,...], read then clock for each tdi
 
-The process is to set TDI and TMS; read TDO if required; clock TCK (as in, TDO is read before TCK happens)
+We can use a single control register with N and the mode
+and tdo sr can contain the data
 
 """
 {
@@ -130,14 +135,14 @@ The process is to set TDI and TMS; read TDO if required; clock TCK (as in, TDO i
         access <= access_none;
         part_switch (apb_request.paddr[3;0]) {
         case apb_address_status:    { access <= apb_request.pwrite ? access_none : access_read_status; }
-        case apb_address_tdo:       { access <= apb_request.pwrite ? access_none : access_read_tdo; }
+        case apb_address_tdo:       { access <= apb_request.pwrite ? access_write_tdo : access_read_tdo; }
         case apb_address_tdo_clear: { access <= apb_request.pwrite ? access_none : access_read_tdo_clear; }
         case apb_address_data1:     { access <= apb_request.pwrite ? access_write_data : access_none; }
         case apb_address_data2:     { access <= apb_request.pwrite ? access_write_data : access_none; }
         case apb_address_data3:     { access <= apb_request.pwrite ? access_write_data : access_none; }
         case apb_address_data4:     { access <= apb_request.pwrite ? access_write_data : access_none; }
         }
-        if (!apb_request.psel) {
+        if (!apb_request.psel || (apb_request.penable && !jtag_state.busy)) {
             access <= access_none;
         }
 
@@ -167,38 +172,72 @@ The process is to set TDI and TMS; read TDO if required; clock TCK (as in, TDO i
         The @a jtag_state 
     """: {
         jtag_state.tck_enable <= 0;
-        if (jtag_state.num_bytes_valid>0) {
-            if ((jtag_state.bytes[8;0]&0xf8) == 0x30) { // ASCII 0-7
-                jtag_state.tdi <= jtag_state.bytes[0];
-                jtag_state.tms <= jtag_state.bytes[1];
-                if (jtag_state.cycle==1) {
-                    jtag_state.tck_enable <= jtag_state.bytes[2];
-                }
-            }
-            if (jtag_state.bytes[8;0] == 0x52) { // ASCII R
-                if (jtag_state.cycle==1) {
-                    jtag_state.tdo_sr <= (jtag_state.tdo_sr>>1) | (jtag_tdo ? 32h80000000 : 0);
-                    jtag_state.num_valid_tdo <= jtag_state.num_valid_tdo + 1;
-                }
-            }
-            if (jtag_state.cycle==1) {
-                jtag_state.bytes           <= jtag_state.bytes >> 8;
-                jtag_state.num_bytes_valid <= jtag_state.num_bytes_valid-1;
-            }
-            jtag_state.cycle <= jtag_state.cycle+1;
-        } else {
-            jtag_state.busy            <= 0;
-        }
         jtag_state.tdo <= jtag_tdo;
-        if ((access==access_write_data) && !jtag_state.busy) {
-            jtag_state.num_bytes_valid <= bundle(1b0,apb_request.paddr[2;0])+1;
-            jtag_state.bytes           <= apb_request.pwdata;
-            jtag_state.busy            <= 1;
-            jtag_state.cycle           <= 0;
-        }
-        if ((access==access_read_tdo_clear) && !jtag_state.busy) {
-            jtag_state.tdo_sr <= 0;
-            jtag_state.num_valid_tdo <= 0;
+        if (jtag_state.busy) {
+            if (jtag_state.num_bytes_valid>0) {
+                if (jtag_state.bytes[7]) {
+                    if (jtag_state.cycle) {
+                        jtag_state.tck_enable <= 1;
+                        jtag_state.tdo_sr <= (jtag_state.tdo_sr>>1) | (jtag_tdo ? 32h80000000 : 0);
+                        jtag_state.bits_remaining <= jtag_state.bits_remaining-1;
+                        if (jtag_state.bits_remaining==0) {
+                            jtag_state.bytes           <= jtag_state.bytes >> 8;
+                            jtag_state.num_bytes_valid <= jtag_state.num_bytes_valid-1;
+                            jtag_state.bits_remaining  <= jtag_state.bytes[5;10];
+                        }
+                    } else {
+                        if (jtag_state.bytes[2;0]==0) { // jtag_reset; tms=1, stop if cycles==[5;2]
+                            jtag_state.tms <= 1;
+                        }
+                        if (jtag_state.bytes[2;0]==1) { // jtag_tms ; tms=tdo_sr[0], stop if cycles==[5;2]
+                            jtag_state.tms <= jtag_state.tdo_sr[0];
+                        }
+                        if (jtag_state.bytes[2;0]==2) { // jtag_shift_last_tms_0; tms=0, tdi=tdo_sr[0], stop if cycles==[5;2]
+                            jtag_state.tms <= 0;
+                            jtag_state.tdi <= jtag_state.tdo_sr[0];
+                        }
+                        if (jtag_state.bytes[2;0]==3) { // jtag_shift_last_tms_X; tms=0, 1 if last bit, tdi=tdo_sr[0], stop if cycles==[5;2]
+                            jtag_state.tms <= (jtag_state.bits_remaining==0);
+                            jtag_state.tdi <= jtag_state.tdo_sr[0];
+                        }
+                    }
+                } else {
+                    if (jtag_state.cycle) {
+                        if ((jtag_state.bytes[8;0]&0xf8) == 0x30) { // ASCII 0-7
+                            jtag_state.tck_enable <= jtag_state.bytes[2];
+                        }
+                        if (jtag_state.bytes[8;0] == 0x52) { // ASCII R
+                            jtag_state.tdo_sr <= (jtag_state.tdo_sr>>1) | (jtag_tdo ? 32h80000000 : 0);
+                            jtag_state.num_valid_tdo <= jtag_state.num_valid_tdo + 1;
+                        }
+                        jtag_state.bytes           <= jtag_state.bytes >> 8;
+                        jtag_state.num_bytes_valid <= jtag_state.num_bytes_valid-1;
+                    } else {
+                        if ((jtag_state.bytes[8;0]&0xf8) == 0x30) { // ASCII 0-7
+                            jtag_state.tdi <= jtag_state.bytes[0];
+                            jtag_state.tms <= jtag_state.bytes[1];
+                        }
+                    }
+                }
+                jtag_state.cycle <= !jtag_state.cycle;
+            } else {
+                jtag_state.busy            <= 0;
+            }
+        } else { // not busy
+            if (access==access_write_data) {
+                jtag_state.num_bytes_valid <= bundle(1b0,apb_request.paddr[2;0])+1;
+                jtag_state.bytes           <= apb_request.pwdata;
+                jtag_state.busy            <= 1;
+                jtag_state.cycle           <= 0;
+                jtag_state.bits_remaining  <= apb_request.pwdata[5;2];
+            }
+            if (access==access_read_tdo_clear) {
+                jtag_state.tdo_sr        <= 0;
+                jtag_state.num_valid_tdo <= 0;
+            }
+            if (access==access_write_tdo) {
+                jtag_state.tdo_sr        <= apb_request.pwdata;
+            }
         }
         jtag.ntrst = 1;
         jtag.tdi = jtag_state.tdi;

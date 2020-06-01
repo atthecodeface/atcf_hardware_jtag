@@ -28,7 +28,7 @@ Only a single configuration of the JTAG TAP is tested.
 from regress.apb.structs import t_apb_request, t_apb_response
 from regress.apb.bfm     import ApbMaster
 from regress.jtag import apb_target_jtag
-from regress.jtag.jtag_module import JtagModule, JtagModuleApb
+from regress.jtag.jtag_module import JtagModule, JtagModuleApbSlow, JtagModuleApbFast
 from cdl.sim     import ThExecFile
 from cdl.sim     import HardwareThDut
 from cdl.sim     import TestCase
@@ -69,18 +69,23 @@ class c_jtag_apb_time_test_base(ThExecFile):
     Base methods for JTAG interaction, really
     """
     #f __init__
-    def __init__(self, use_apb_target_jtag=False, **kwargs):
+    def __init__(self, use_apb_target_jtag=0, **kwargs):
         self.use_apb_target_jtag = use_apb_target_jtag
         super(c_jtag_apb_time_test_base,self).__init__(**kwargs)
         pass
     #f run__init - invoked by submodules
     def run__init(self):
         self.bfm_wait(10)
-        if self.use_apb_target_jtag:
+        if self.use_apb_target_jtag!=0:
             self.apb = ApbMaster(self, "apb_request",  "apb_response")
             self.apb_map = ApbAddressMap()
             self.jtag_map  = self.apb_map.jtag # This is an ApbAddressMap()
-            self.jtag_module = JtagModuleApb(self, self.apb, self.jtag_map)
+            if self.use_apb_target_jtag==2:
+                self.jtag_module = JtagModuleApbFast(self, self.apb, self.jtag_map)
+                pass
+            else:
+                self.jtag_module = JtagModuleApbSlow(self, self.apb, self.jtag_map)
+                pass
             pass
         else:
             self.jtag_module = JtagModule(self.bfm_wait, self.tck_enable, self.jtag__tms, self.jtag__tdi, self.tdo, self)
@@ -444,11 +449,11 @@ class JtagApbTimer(TestCase):
     }
     pass
 
-#c ApbTargetJtag
-class ApbTargetJtag(TestCase):
+#c ApbTargetJtagSlow
+class ApbTargetJtagSlow(TestCase):
     hw = jtag_apb_timer_hw
     # "verbosity":0,
-    kwargs = {"th_args":{"use_apb_target_jtag":True},}
+    kwargs = {"th_args":{"use_apb_target_jtag":1},}
     _tests = {
        "idcode"      : (c_jtag_apb_time_test_idcode,       4*1000,  kwargs),
        "bypass"      : (c_jtag_apb_time_test_bypass,      20*1000,  kwargs),
@@ -458,6 +463,28 @@ class ApbTargetJtag(TestCase):
        "timer_fast2" : (c_jtag_apb_time_test_time_fast2,  40*1000,  kwargs),
        "timer_fast3" : (c_jtag_apb_time_test_time_fast3,  40*1000, kwargs),
         "comparator"  : (c_jtag_apb_time_test_comparator, 45*1000, kwargs),
+
+        "smoke"  : (c_jtag_apb_time_test_time_slow,40*1000,  kwargs),
+    }
+    pass
+
+#c ApbTargetJtagFast
+class ApbTargetJtagFast(TestCase):
+    """
+    Uses faster apb->jtag mode
+    """
+    hw = jtag_apb_timer_hw
+    # "verbosity":0,
+    kwargs = {"th_args":{"use_apb_target_jtag":2},}
+    _tests = {
+       "idcode"      : (c_jtag_apb_time_test_idcode,       1*1000,  kwargs),
+       "bypass"      : (c_jtag_apb_time_test_bypass,       6*1000,  kwargs),
+       "bypass2"     : (c_jtag_apb_time_test_bypass2,      6*1000,  kwargs),
+       "timer_slow"  : (c_jtag_apb_time_test_time_slow,   15*1000,  kwargs),
+       "timer_fast"  : (c_jtag_apb_time_test_time_fast,   15*1000,  kwargs),
+       "timer_fast2" : (c_jtag_apb_time_test_time_fast2,  15*1000,  kwargs),
+       "timer_fast3" : (c_jtag_apb_time_test_time_fast3,  15*1000, kwargs),
+        "comparator"  : (c_jtag_apb_time_test_comparator, 15*1000, kwargs),
 
         "smoke"  : (c_jtag_apb_time_test_time_slow,40*1000,  kwargs),
     }
