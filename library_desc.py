@@ -15,6 +15,7 @@ class JtagModules(cdl_desc.Modules):
     modules = []
     modules += [ CdlModule("jtag_tap") ]
     modules += [ CdlModule("jtag_tap_apb") ]
+    modules += [ CdlModule("apb_target_jtag") ]
     modules += [ CdlModule("tb_jtag_apb_timer", src_dir=tb_src_dir) ]
     pass
 
